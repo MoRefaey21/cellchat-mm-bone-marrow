@@ -1,0 +1,321 @@
+---
+title: "Assignment2_CellChat"
+author: "Mohammed Ashraf"
+date: 18/07/2025
+format:
+  html:
+    theme: lux
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    self-contained: true
+execute:
+  echo: false
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## 1. Setting Working Directory & Loading Libraries
+
+```{r setup, include=FALSE}
+root.directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+
+setwd(root.directory)                                   
+
+knitr::opts_chunk$set(echo = T, warning = F)
+
+knitr::opts_knit$set(root.dir = root.directory)
+
+dir.create("write/figures", recursive = T, showWarnings = F)
+dir.create("write/tables",  recursive = T, showWarnings = F)
+dir.create("checkpoints",   recursive = T, showWarnings = F)
+
+options(stringsAsFactors = FALSE)
+
+# Loading libraries
+library(CellChat)
+library(patchwork)
+library(Seurat)
+```
+
+## 2. Loading Seurat Object
+
+```{r}
+seu <- readRDS("checkpoints/seu_with_SingleR.rds")
+
+# Checking the number of cells per cell type
+table(seu$SingleR_label)
+```
+
+## 3. Creating a CellChat Object from the Seurat Object
+
+```{r}
+cellchat <- createCellChat(
+  object = seu,
+  group.by = "SingleR_label", # Grouping by cell type
+  assay = "RNA"
+)
+
+# Checking the object information
+cellchat
+
+# 14768 genes.
+# 3789 cells.
+
+# Attaching the human LR database to the object and keeping only secreted signalling genes
+cellchat@DB <- CellChatDB.human
+
+# subsetting the expression data of signaling genes
+cellchat <- subsetData(cellchat)
+
+# Inspecting available group names
+levels(cellchat@idents)
+```
+
+**Cell Types:**
+
+```         
+[1] "B_cell"           "CMP"              "GMP"
+[4] "HSC_-G-CSF"       "HSC_CD34+"        "Monocyte"
+[7] "Myelocyte"        "Neurons"          "NK_cell"
+[10] "Pre-B_cell_CD34-" "Pro-B_cell_CD34+" "Pro-Myelocyte"
+[13] "T_cells"     
+```
+
+## 4. Pre-processing & Communication Inference
+
+```{r}
+# Identifying over-expressed genes and interactions
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+# The number of highly variable ligand-receptor pairs used for signaling inference is 437.
+
+# Computing communication probability & filtering low-cell groups
+cellchat <- computeCommunProb(cellchat, type = "triMean")
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+
+# Inferring pathway-level communication
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+
+# Inspecting the signalling pathways inferred
+unique(cellchat@netP$pathways)
+```
+
+**Inferred pathways:**
+
+```         
+[1] "MHC-I"         "MIF"           "CD99"
+[4] "CypA"          "MHC-II"        "RESISTIN"
+[7] "MK"            "GALECTIN"      "BAFF"
+[10] "ICAM"          "CLEC"          "ANNEXIN"
+[13] "PECAM1"        "ADGRE"         "Prostaglandin"
+[16] "LCK"           "BTLA"          "SELPLG"
+[19] "IL16"          "PECAM2"        "BAG"
+[22] "NCAM"    
+```
+
+I got this message:
+
+The cell-cell communication related with the following cell groups are
+excluded due to the few number of cells: CMP, GMP, HSC\_-G-CSF,
+HSC_CD34+, Myelocyte, Neurons, Pro-B_cell_CD34+, Pro-Myelocyte ! 76.7%
+interactions are removed!
+
+## 5. Network Centrality
+
+```{r}
+# Computing the network centrality scores
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+```
+
+## 6. Visualizations
+
+In most of the upcoming plots `remove.isolate = T` is used to remove the
+low-cell groups that were filtered out with `filterCommunication()` from
+the plot.
+
+### 6.1 Circle plot
+
+```{r}
+# Interaction number circle plot
+png("write/figures/circle_num_interactions.png",
+    width = 2000, height = 2000, res = 300)
+
+netVisual_circle(
+  cellchat@net$count,
+  weight.scale = T,
+  label.edge = F,
+  title.name = "Number of interactions",
+  remove.isolate = T
+)
+
+dev.off()
+
+# Interaction weights circle plot
+png("write/figures/circle_weight_interactions.png",
+    width = 2000, height = 2000, res = 300)
+
+netVisual_circle(
+  cellchat@net$weight,
+  weight.scale = T,
+  label.edge = F,
+  title.name = "Interaction weights",
+  remove.isolate = T
+)
+
+dev.off()
+```
+
+### 6.2 Heatmaps of interaction count and weight
+
+```{r}
+# Interaction number heatmap
+ht1 <- netVisual_heatmap(
+  cellchat,
+  remove.isolate = T
+)
+
+# Interaction weights heatmap
+ht2 <- netVisual_heatmap(
+  cellchat,
+  measure = "weight",
+  remove.isolate = T
+)
+
+combined_ht <- ht1 + ht2
+
+png("write/figures/heatmaps_interaction_count_weight.png",
+    width  = 3000, height = 2000, res = 300)
+
+ComplexHeatmap::draw(combined_ht, heatmap_legend_side = "right")
+
+# close the device so the PNG is actually written to disk
+dev.off()
+```
+
+### 6.3 Signaling Role: Sending vs. Receiving Scatter Plot
+
+```{r}
+netAnalysis_signalingRole_scatter(cellchat, slot.name = "netP")
+
+ggsave("write/figures/signaling_role_scatter.png",
+       width  = 15,
+       height = 10
+)
+```
+
+### 6.4 Circle Plot (MIF & GALECTIN Pathways)
+
+```{r}
+# MIF pathway
+png("write/figures/circle_MIF.png",
+    width = 2000,
+    height = 2000,
+    res = 300
+)
+
+netVisual_aggregate(
+  cellchat,
+  signaling      = "MIF",
+  layout         = "circle",
+  edge.width.max = 10,
+  signaling.name = "MIF",
+  remove.isolate = T
+)
+
+dev.off()
+
+# GALECTIN pathway
+png("write/figures/circle_GALECTIN.png",
+    width = 2000,
+    height = 2000,
+    res = 300
+)
+
+netVisual_aggregate(
+  cellchat,
+  signaling      = "GALECTIN",
+  layout         = "circle",
+  edge.width.max = 10,
+  signaling.name = "GALECTIN",
+  remove.isolate = T
+)
+
+dev.off()
+```
+
+### 6.5 Bubble Plots (T-Cells, MIF & GALECTIN)
+
+```{r}
+# Showing signals from T cells to all groups
+netVisual_bubble(cellchat,
+                 sources.use = "T_cells",
+                 angle.x = 45)
+
+ggsave("write/figures/bubble_T_Cells.png",
+       width  = 7,
+       height = 10,
+)
+
+# Showing all the significant interactions (L-R pairs) associated with the MIF pathway
+netVisual_bubble(cellchat,
+                 signaling = "MIF",
+                 remove.isolate = T)
+
+ggsave("write/figures/bubble_MIF.png",
+       width  = 7,
+       height = 10,
+)
+
+# Showing all the significant interactions (L-R pairs) associated with the GALECTIN pathway
+netVisual_bubble(cellchat,
+                 signaling = "GALECTIN",
+                 remove.isolate = T)
+
+ggsave("write/figures/bubble_GALECTIN.png",
+       width  = 7,
+       height = 10,
+)
+```
+
+### 6.6 Gene Expression Violin Plot (MIF & GALECTIN Pathway Genes)
+
+```{r}
+# MIF pathway
+plotGeneExpression(cellchat,
+                   signaling = "MIF",
+                   colors.ggplot = T,
+                   type = "violin"
+)
+
+ggsave("write/figures/Gene_Expression_Violin_MIF.png",
+       width = 15,
+       height = 10
+)
+
+# GALECTIN pathway
+plotGeneExpression(cellchat,
+                   signaling = "GALECTIN",
+                   colors.ggplot = T,
+                   type = "violin"
+)
+
+ggsave("write/figures/Gene_Expression_Violin_GALECTIN.png",
+       width = 15,
+       height = 10
+)
+```
+
+## 7. Exporting Results
+
+```{r}
+# CellChat object
+saveRDS(cellchat, file = "cellchat.rds")
+
+# Pathway Network dataframe
+net.df <- subsetCommunication(cellchat)
+
+write.csv(net.df, "write/tables/CellChat_edges.csv", row.names = F)
+```
