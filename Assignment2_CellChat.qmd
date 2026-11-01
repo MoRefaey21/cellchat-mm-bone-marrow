@@ -1,6 +1,6 @@
 ---
 title: "Assignment2_CellChat"
-author: "Mohammed Ashraf"
+author: "Mohammed Refaey"
 date: 18/07/2025
 format:
   html:
@@ -19,7 +19,7 @@ editor:
 ## 1. Setting Working Directory & Loading Libraries
 
 ```{r setup, include=FALSE}
-root.directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+root.directory <- if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) dirname(rstudioapi::getActiveDocumentContext()$path) else getwd()
 
 setwd(root.directory)                                   
 
@@ -63,7 +63,7 @@ cellchat
 # 14768 genes.
 # 3789 cells.
 
-# Attaching the human LR database to the object and keeping only secreted signalling genes
+# Attaching the full human LR database (Secreted Signaling, ECM-Receptor and Cell-Cell Contact)
 cellchat@DB <- CellChatDB.human
 
 # subsetting the expression data of signaling genes
